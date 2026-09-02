@@ -92,6 +92,17 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Firestore calls have no built-in timeout — an ad blocker, a flaky
+// connection, or an offline device can leave a write "pending" forever
+// with no error and no success. Race it against a timer so the UI always
+// lands on a definite state instead of hanging on a loading message.
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 // ---------- Menu view ----------
 
 function renderMenu() {
@@ -394,7 +405,7 @@ function renderLeaderboardSubmit(container, attempt) {
   }
 
   container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
-  window.Leaderboard.submitScore({ name, ...attempt })
+  withTimeout(window.Leaderboard.submitScore({ name, ...attempt }), 10000, "Leaderboard submission timed out")
     .then(() => {
       container.innerHTML = `
         <p class="leaderboard-note leaderboard-note-ok">
@@ -549,7 +560,7 @@ function renderLeaderboard() {
   renderTabs();
   renderContent();
 
-  window.Leaderboard.fetchAllScores()
+  withTimeout(window.Leaderboard.fetchAllScores(), 10000, "Leaderboard fetch timed out")
     .then((scores) => {
       allScores = scores;
       renderContent();
