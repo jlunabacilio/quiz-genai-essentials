@@ -23,25 +23,44 @@ Then visit `http://localhost:8000`.
 ## Project structure
 
 ```
-index.html            # app shell
-css/styles.css        # styling
-js/data.js             # quiz content (6 days, 48 questions)
-js/app.js               # rendering + quiz logic + progress tracking + leaderboard UI
-js/firebase-config.js   # your Firebase project's public web config (see below)
-js/firebase-init.js     # loads the Firebase SDK from CDN, exposes window.Leaderboard
-firestore.rules         # security rules to paste into the Firebase console
+index.html                     # app shell
+css/styles.css                 # styling
+js/data.js                     # quiz content (6 days, 48 questions)
+js/app.js                      # rendering + quiz logic + progress tracking + leaderboard UI
+js/firebase-config.template.js # checked-in template — no real values, safe to commit
+js/firebase-config.js          # your real Firebase config — git-ignored, never committed
+js/firebase-init.js            # loads the Firebase SDK from CDN, exposes window.Leaderboard
+firestore.rules                # security rules to paste into the Firebase console
+.github/workflows/deploy.yml   # builds js/firebase-config.js from secrets and deploys to Pages
 ```
 
 ## Leaderboard setup
 
 The leaderboard uses **Firestore** (Firebase's free Spark plan easily covers a small team — see limits below). GitHub Pages only serves static files, so it can't run a backend itself; the browser talks to Firestore directly using the public web SDK.
 
-### 1. Add your Firebase config
+The Firebase web config values (`apiKey`, `authDomain`, etc.) are meant to be public — they identify your project to the client SDK, they are not secrets, and real access control comes from the security rules in step 2. That said, GitHub's push protection flags anything shaped like a Google API key as a potential leaked secret, so **the real config is never committed** — it's generated at deploy time from GitHub Actions secrets (see step 1) and kept out of git via `.gitignore`.
 
-Open `js/firebase-config.js` and replace the placeholder values with your project's config, from:
-**Firebase Console → ⚙️ Project settings → General → Your apps → your web app → SDK setup and configuration → "Config"**.
+### 1. Add your Firebase config as GitHub Actions secrets
 
-These values (`apiKey`, `authDomain`, etc.) are meant to be public and safe to commit — they identify your project to the client SDK, they are not secrets. Real access control comes from step 2.
+In the repo, go to **Settings → Secrets and variables → Actions → New repository secret**, and add each of these (values from **Firebase Console → ⚙️ Project settings → General → Your apps → your web app → SDK setup and configuration → "Config"**):
+
+- `FIREBASE_API_KEY`
+- `FIREBASE_AUTH_DOMAIN`
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_STORAGE_BUCKET`
+- `FIREBASE_MESSAGING_SENDER_ID`
+- `FIREBASE_APP_ID`
+
+Then go to **Settings → Pages → Build and deployment → Source** and select **GitHub Actions** (not "Deploy from a branch") — that's what lets `.github/workflows/deploy.yml` publish the site.
+
+On every push to `main`, the workflow copies `js/firebase-config.template.js` to `js/firebase-config.js`, substituting these secrets in, then deploys the result to Pages. That generated file only ever exists in the deploy artifact — it's never written back to the repository.
+
+For local testing, copy the template yourself and fill in real values — this local copy is git-ignored, so it stays on your machine only:
+
+```bash
+cp js/firebase-config.template.js js/firebase-config.js
+# then edit js/firebase-config.js and replace the __PLACEHOLDER__ values
+```
 
 ### 2. Apply the security rules
 
@@ -51,7 +70,7 @@ These rules let anyone read the `scores` collection (it's a public team leaderbo
 
 ### 3. Try it
 
-Serve the site locally (`python3 -m http.server 8000` — the Firebase SDK is loaded as an ES module, which needs `http://`, not `file://`), complete a quiz, and enter a name when prompted. Open the **🏆 Leaderboard** button in the header — your entry should show up under that day's tab and under "Overall".
+Locally: serve the site (`python3 -m http.server 8000` — the Firebase SDK is loaded as an ES module, which needs `http://`, not `file://`) after creating your local `js/firebase-config.js` per step 1. In production: push to `main` and check the **Actions** tab for the deploy run. Either way, complete a quiz, enter a name when prompted, then open the **🏆 Leaderboard** button in the header — your entry should show up under that day's tab and under "Overall".
 
 ### Free tier limits (Spark plan, no credit card, can't incur charges)
 
