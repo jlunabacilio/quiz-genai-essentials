@@ -1,6 +1,8 @@
 // App state, rendering, and localStorage progress tracking.
 
 const STORAGE_KEY = "genai-essentials-quiz-progress";
+const PLAYER_NAME_KEY = "genai-essentials-player-name";
+const SKIP_LEADERBOARD_KEY = "genai-essentials-skip-leaderboard";
 const PASS_THRESHOLD = 0.7; // 70% correct unlocks the next day
 
 const root = document.getElementById("view-root");
@@ -43,6 +45,51 @@ function updateHeaderScore(progress) {
   } else {
     headerScoreEl.hidden = true;
   }
+}
+
+function getPlayerName() {
+  try {
+    return localStorage.getItem(PLAYER_NAME_KEY) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function setPlayerName(name) {
+  try {
+    localStorage.setItem(PLAYER_NAME_KEY, name);
+  } catch (e) {
+    // localStorage unavailable — the name just won't be remembered.
+  }
+}
+
+function getSkipLeaderboard() {
+  try {
+    return localStorage.getItem(SKIP_LEADERBOARD_KEY) === "true";
+  } catch (e) {
+    return false;
+  }
+}
+
+function setSkipLeaderboard(skip) {
+  try {
+    localStorage.setItem(SKIP_LEADERBOARD_KEY, skip ? "true" : "false");
+  } catch (e) {
+    // localStorage unavailable — the choice just won't be remembered.
+  }
+}
+
+function formatTime(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 // ---------- Menu view ----------
@@ -127,6 +174,7 @@ function renderQuiz(dayId) {
     score: 0,
     answered: false,
     selectedOption: null,
+    startTime: performance.now(),
   };
 
   function renderQuestion() {
@@ -214,6 +262,7 @@ function renderQuiz(dayId) {
   }
 
   function finishQuiz() {
+    const timeMs = Math.round(performance.now() - state.startTime);
     const progress = loadProgress();
     const total = day.questions.length;
     const pct = state.score / total;
@@ -228,7 +277,7 @@ function renderQuiz(dayId) {
     saveProgress(progress);
     updateHeaderScore(progress);
 
-    renderResults(day, state.score, total, passed);
+    renderResults(day, state.score, total, passed, timeMs);
   }
 
   renderQuestion();
@@ -236,7 +285,7 @@ function renderQuiz(dayId) {
 
 // ---------- Results view ----------
 
-function renderResults(day, score, total, passed) {
+function renderResults(day, score, total, passed, timeMs) {
   const pct = Math.round((score / total) * 100);
   const nextDay = QUIZ_DAYS.find((d) => d.id === day.id + 1);
 
@@ -246,7 +295,7 @@ function renderResults(day, score, total, passed) {
     <div class="results-card ${passed ? "results-pass" : "results-fail"}">
       <div class="results-icon">${passed ? "🎉" : "📘"}</div>
       <h1>${passed ? "Day complete!" : "Almost there"}</h1>
-      <p class="results-score">${score} / ${total} correct (${pct}%)</p>
+      <p class="results-score">${score} / ${total} correct (${pct}%) · ${formatTime(timeMs)}</p>
       <p class="results-message">
         ${
           passed
@@ -256,6 +305,7 @@ function renderResults(day, score, total, passed) {
             : `You need ${Math.round(PASS_THRESHOLD * 100)}% to unlock the next day. Review the material and try again.`
         }
       </p>
+      <div id="leaderboard-submit"></div>
       <div class="results-actions">
         <button class="btn btn-secondary" id="retry-btn">Retry this day</button>
         <button class="btn btn-primary" id="menu-btn">Back to menu</button>
@@ -267,8 +317,233 @@ function renderResults(day, score, total, passed) {
   el.querySelector("#menu-btn").addEventListener("click", () => renderMenu());
 
   root.replaceChildren(el);
+
+  renderLeaderboardSubmit(el.querySelector("#leaderboard-submit"), {
+    day: day.id,
+    correct: score,
+    total,
+    timeMs,
+    passed,
+  });
+}
+
+// ---------- Leaderboard: submit an attempt ----------
+
+function renderLeaderboardSubmit(container, attempt) {
+  if (!window.Leaderboard || !window.Leaderboard.isConfigured) {
+    return; // Firebase not set up yet — stay quiet, the rest of the app still works.
+  }
+  if (getSkipLeaderboard()) {
+    return; // user opted out
+  }
+
+  const existingName = getPlayerName();
+
+  if (existingName) {
+    container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
+    window.Leaderboard.submitScore({ name: existingName, ...attempt })
+      .then(() => {
+        container.innerHTML = `
+          <p class="leaderboard-note leaderboard-note-ok">
+            🏆 Submitted to the team leaderboard as "${escapeHtml(existingName)}".
+            <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
+          </p>
+        `;
+        container.querySelector("#not-you-btn").addEventListener("click", () => {
+          setPlayerName("");
+          renderLeaderboardSubmit(container, attempt);
+        });
+      })
+      .catch(() => {
+        container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
+      });
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="leaderboard-prompt">
+      <label for="lb-name-input">Add your name to the team leaderboard</label>
+      <div class="leaderboard-prompt-row">
+        <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
+        <button class="btn btn-primary" id="lb-submit-btn" type="button">Submit</button>
+      </div>
+      <button class="link-btn" id="lb-skip-btn" type="button">No thanks, don't ask again</button>
+    </div>
+  `;
+
+  const input = container.querySelector("#lb-name-input");
+  const submit = () => {
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+    setPlayerName(name);
+    renderLeaderboardSubmit(container, attempt);
+  };
+  container.querySelector("#lb-submit-btn").addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
+
+  container.querySelector("#lb-skip-btn").addEventListener("click", () => {
+    setSkipLeaderboard(true);
+    container.innerHTML = "";
+  });
+}
+
+// ---------- Leaderboard: view ----------
+
+function bestPerNamePerDay(scores) {
+  const byDay = new Map();
+  scores.forEach((s) => {
+    if (!byDay.has(s.day)) byDay.set(s.day, new Map());
+    const dayMap = byDay.get(s.day);
+    const existing = dayMap.get(s.name);
+    if (!existing || s.correct > existing.correct || (s.correct === existing.correct && s.timeMs < existing.timeMs)) {
+      dayMap.set(s.name, s);
+    }
+  });
+  return byDay;
+}
+
+function renderDayTable(scores, dayId) {
+  const byDay = bestPerNamePerDay(scores);
+  const dayMap = byDay.get(dayId) || new Map();
+  const rows = [...dayMap.values()].sort((a, b) => b.correct - a.correct || a.timeMs - b.timeMs).slice(0, 10);
+
+  if (rows.length === 0) {
+    return `<p class="muted">No scores yet for this day. Be the first!</p>`;
+  }
+
+  return `
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Name</th><th>Score</th><th>Time</th></tr></thead>
+      <tbody>
+        ${rows
+          .map(
+            (r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${r.correct}/${r.total}</td>
+            <td>${formatTime(r.timeMs)}</td>
+          </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderOverallTable(scores) {
+  const byDay = bestPerNamePerDay(scores);
+  const totals = new Map();
+
+  byDay.forEach((dayMap) => {
+    dayMap.forEach((entry, name) => {
+      const t = totals.get(name) || { name, correct: 0, timeMs: 0, days: 0 };
+      t.correct += entry.correct;
+      t.timeMs += entry.timeMs;
+      t.days += 1;
+      totals.set(name, t);
+    });
+  });
+
+  const rows = [...totals.values()].sort((a, b) => b.correct - a.correct || a.timeMs - b.timeMs).slice(0, 10);
+
+  if (rows.length === 0) {
+    return `<p class="muted">No scores yet. Be the first!</p>`;
+  }
+
+  return `
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Name</th><th>Total correct</th><th>Total time</th><th>Days</th></tr></thead>
+      <tbody>
+        ${rows
+          .map(
+            (r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${r.correct}</td>
+            <td>${formatTime(r.timeMs)}</td>
+            <td>${r.days}/6</td>
+          </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderLeaderboard() {
+  const el = document.createElement("div");
+  el.className = "leaderboard-view";
+  el.innerHTML = `
+    <div class="quiz-header">
+      <button class="btn btn-ghost btn-back" id="lb-back-btn">← Back to menu</button>
+      <div class="quiz-meta">Team Leaderboard</div>
+    </div>
+    <div class="leaderboard-tabs" id="lb-tabs"></div>
+    <div id="lb-content" class="leaderboard-content"><p class="muted">Loading…</p></div>
+  `;
+  el.querySelector("#lb-back-btn").addEventListener("click", () => renderMenu());
+  root.replaceChildren(el);
+
+  if (!window.Leaderboard || !window.Leaderboard.isConfigured) {
+    el.querySelector("#lb-tabs").remove();
+    el.querySelector("#lb-content").innerHTML = `<p class="muted">The leaderboard isn't configured yet — add your Firebase project details in js/firebase-config.js.</p>`;
+    return;
+  }
+
+  const tabsEl = el.querySelector("#lb-tabs");
+  const contentEl = el.querySelector("#lb-content");
+  const tabs = [...QUIZ_DAYS.map((d) => ({ key: String(d.id), label: `Day ${d.id}` })), { key: "overall", label: "Overall" }];
+  let activeTab = "overall";
+  let allScores = null;
+
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    tabs.forEach((tab) => {
+      const btn = document.createElement("button");
+      btn.className = "lb-tab" + (tab.key === activeTab ? " active" : "");
+      btn.textContent = tab.label;
+      btn.addEventListener("click", () => {
+        activeTab = tab.key;
+        renderTabs();
+        renderContent();
+      });
+      tabsEl.appendChild(btn);
+    });
+  }
+
+  function renderContent() {
+    if (!allScores) {
+      contentEl.innerHTML = `<p class="muted">Loading…</p>`;
+      return;
+    }
+    contentEl.innerHTML = activeTab === "overall" ? renderOverallTable(allScores) : renderDayTable(allScores, Number(activeTab));
+  }
+
+  renderTabs();
+  renderContent();
+
+  window.Leaderboard.fetchAllScores()
+    .then((scores) => {
+      allScores = scores;
+      renderContent();
+    })
+    .catch(() => {
+      contentEl.innerHTML = `<p class="leaderboard-note-error">Couldn't load the leaderboard right now.</p>`;
+    });
 }
 
 // ---------- Init ----------
+
+const leaderboardBtn = document.getElementById("leaderboard-btn");
+if (leaderboardBtn) {
+  leaderboardBtn.addEventListener("click", () => renderLeaderboard());
+}
 
 renderMenu();

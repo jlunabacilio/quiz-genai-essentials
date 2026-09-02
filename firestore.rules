@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// Firestore Security Rules for the Generative AI Essentials leaderboard.
+//
+// How to apply: Firebase Console -> your project -> Build -> Firestore
+// Database -> Rules tab -> paste this file's contents -> Publish.
+//
+// Design: anyone can read the "scores" collection (it's a public team
+// leaderboard, no login system), but a write must look like a genuine quiz
+// attempt — valid day/score bounds, a server-set timestamp, and a name under
+// 40 chars. Entries can never be edited or deleted once written, so no one
+// can silently rewrite another player's score.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scores/{scoreId} {
+      allow read: if true;
+
+      allow create: if
+        request.resource.data.keys().hasAll(['name', 'day', 'correct', 'total', 'timeMs', 'passed', 'timestamp']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 40 &&
+        request.resource.data.day is int &&
+        request.resource.data.day >= 1 && request.resource.data.day <= 6 &&
+        request.resource.data.total is int &&
+        request.resource.data.total > 0 && request.resource.data.total <= 50 &&
+        request.resource.data.correct is int &&
+        request.resource.data.correct >= 0 && request.resource.data.correct <= request.resource.data.total &&
+        request.resource.data.timeMs is int &&
+        request.resource.data.timeMs > 0 && request.resource.data.timeMs < 3600000 &&
+        request.resource.data.passed is bool &&
+        request.resource.data.timestamp == request.time;
+
+      allow update, delete: if false;
+    }
+  }
+}
