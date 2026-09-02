@@ -108,6 +108,31 @@ function withTimeout(promise, ms, message) {
   ]);
 }
 
+function leaderboardUsable() {
+  return Boolean(window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard());
+}
+
+// For a named player, Firestore's attempts collection is the authoritative
+// count (it's what the admin panel edits, and what the create/update rules
+// actually enforce) — this pulls it down and overwrites the local copy so
+// an admin's reset, or an attempt recorded from a different browser, shows
+// up here too. Returns whether anything actually changed.
+async function reconcileAttemptsFromFirestore(name) {
+  const remote = await withTimeout(window.Leaderboard.fetchAttempts(name), 10000, "Attempts fetch timed out");
+  const progress = loadProgress();
+  let changed = false;
+  for (let day = 1; day <= 6; day++) {
+    const remoteCount = remote[day] || 0;
+    const local = progress[day] || { bestScore: 0, passed: false, attempts: 0 };
+    if ((local.attempts || 0) !== remoteCount) {
+      progress[day] = { bestScore: local.bestScore || 0, passed: !!local.passed, attempts: remoteCount };
+      changed = true;
+    }
+  }
+  if (changed) saveProgress(progress);
+  return changed;
+}
+
 // ---------- Menu view ----------
 
 function renderMenu() {
@@ -182,6 +207,20 @@ function renderMenu() {
   el.appendChild(grid);
 
   root.replaceChildren(el);
+
+  // Best-effort background sync: local storage renders instantly, then we
+  // check Firestore for a named player and re-render only if something
+  // actually changed (an admin reset, or an attempt from another device).
+  // Guarded so a slow response can't yank the user back to the menu if
+  // they've already moved on to a quiz by the time it resolves.
+  const name = getPlayerName();
+  if (leaderboardUsable() && name) {
+    reconcileAttemptsFromFirestore(name)
+      .then((changed) => {
+        if (changed && root.querySelector(".menu")) renderMenu();
+      })
+      .catch(() => {}); // offline/slow — local data still governs
+  }
 }
 
 // ---------- Name gate (asked once, before the first quiz attempt) ----------
@@ -193,8 +232,7 @@ function startQuiz(dayId) {
     return;
   }
 
-  const leaderboardUsable = window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard();
-  if (leaderboardUsable && !getPlayerName()) {
+  if (leaderboardUsable() && !getPlayerName()) {
     renderNameGate(dayId);
   } else {
     renderQuiz(dayId);
@@ -367,23 +405,50 @@ function renderQuiz(dayId) {
 
   function finishQuiz() {
     const timeMs = Math.round(performance.now() - state.startTime);
-    const progress = loadProgress();
-    const total = day.questions.length;
-    const pct = state.score / total;
-    const passed = pct >= PASS_THRESHOLD;
+    const name = getPlayerName();
 
-    const prev = progress[day.id];
-    const bestScore = prev ? Math.max(prev.bestScore, state.score) : state.score;
-    const attempts = getAttempts(prev) + 1;
-    progress[day.id] = {
-      bestScore,
-      passed: (prev && prev.passed) || passed,
-      attempts,
-    };
-    saveProgress(progress);
-    updateHeaderScore(progress);
+    if (leaderboardUsable() && name) {
+      // Firestore's attempts collection is authoritative for a named
+      // player: this is the write the security rules actually enforce
+      // (self-increment by exactly 1, capped at 2), so the result tells us
+      // the *real* count even if this browser's local copy was stale.
+      withTimeout(window.Leaderboard.recordAttempt(name, day.id), 10000, "Attempt recording timed out")
+        .then((attempts) => wrapUp(attempts, {}))
+        .catch((err) => {
+          if (err && err.message === "attempts-exhausted") {
+            // The server says both attempts were already used (most likely
+            // recorded from another tab/device) — this run doesn't count.
+            wrapUp(MAX_ATTEMPTS, { notCounted: true });
+          } else {
+            // Network hiccup: still enforce the cap locally so it can't be
+            // bypassed by staying offline, but flag that it didn't sync.
+            const prevAttempts = getAttempts(loadProgress()[day.id]);
+            wrapUp(prevAttempts + 1, { syncFailed: true });
+          }
+        });
+    } else {
+      const prevAttempts = getAttempts(loadProgress()[day.id]);
+      wrapUp(prevAttempts + 1, {});
+    }
 
-    renderResults(day, state.score, total, passed, timeMs, attempts, bestScore);
+    function wrapUp(attempts, { notCounted, syncFailed } = {}) {
+      const progress = loadProgress();
+      const total = day.questions.length;
+      const pct = state.score / total;
+      const passed = !notCounted && pct >= PASS_THRESHOLD;
+      const prev = progress[day.id];
+
+      const bestScore = notCounted ? (prev ? prev.bestScore : 0) : prev ? Math.max(prev.bestScore, state.score) : state.score;
+      progress[day.id] = {
+        bestScore,
+        passed: notCounted ? !!(prev && prev.passed) : (prev && prev.passed) || passed,
+        attempts,
+      };
+      saveProgress(progress);
+      updateHeaderScore(progress);
+
+      renderResults(day, state.score, total, passed, timeMs, attempts, bestScore, { notCounted, syncFailed });
+    }
   }
 
   renderQuestion();
@@ -391,14 +456,17 @@ function renderQuiz(dayId) {
 
 // ---------- Results view ----------
 
-function renderResults(day, score, total, passed, timeMs, attempts, bestScore) {
+function renderResults(day, score, total, passed, timeMs, attempts, bestScore, flags = {}) {
+  const { notCounted, syncFailed } = flags;
   const pct = Math.round((score / total) * 100);
   const nextDay = QUIZ_DAYS.find((d) => d.id === day.id + 1);
   const attemptsRemaining = Math.max(0, MAX_ATTEMPTS - attempts);
-  const bestPct = Math.round((bestScore / total) * 100);
+  const bestPct = total > 0 ? Math.round((bestScore / total) * 100) : 0;
 
   let message;
-  if (passed) {
+  if (notCounted) {
+    message = "This attempt didn't count — you'd already used both attempts for this day, most likely from another tab or device.";
+  } else if (passed) {
     message = nextDay
       ? `Great work — Day ${nextDay.id}: ${nextDay.title} is now unlocked.`
       : "You've completed the full Generative AI Essentials path!";
@@ -411,21 +479,22 @@ function renderResults(day, score, total, passed, timeMs, attempts, bestScore) {
   const el = document.createElement("div");
   el.className = "results";
   el.innerHTML = `
-    <div class="results-card ${passed ? "results-pass" : "results-fail"}">
-      <div class="results-icon">${passed ? "🎉" : "📘"}</div>
-      <h1>${passed ? "Day complete!" : "Almost there"}</h1>
+    <div class="results-card ${notCounted ? "" : passed ? "results-pass" : "results-fail"}">
+      <div class="results-icon">${notCounted ? "⚠️" : passed ? "🎉" : "📘"}</div>
+      <h1>${notCounted ? "Attempt not recorded" : passed ? "Day complete!" : "Almost there"}</h1>
       <p class="results-score">${score} / ${total} correct (${pct}%) · ${formatTime(timeMs)}</p>
       <div class="results-messages">
         <p class="results-message">${message}</p>
         ${
-          attemptsRemaining > 0 && !passed
+          attemptsRemaining > 0 && !passed && !notCounted
             ? `<p class="muted results-attempts-note">${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} left for this day.</p>`
             : ""
         }
+        ${syncFailed ? `<p class="muted results-attempts-note">Couldn't confirm this attempt with the leaderboard server — it's still saved locally on this device.</p>` : ""}
       </div>
       <div id="leaderboard-submit"></div>
       <div class="results-actions">
-        ${attemptsRemaining > 0 ? `<button class="btn btn-secondary" id="retry-btn">Retry this day</button>` : ""}
+        ${attemptsRemaining > 0 && !notCounted ? `<button class="btn btn-secondary" id="retry-btn">Retry this day</button>` : ""}
         <button class="btn btn-primary" id="menu-btn">Back to menu</button>
       </div>
     </div>
@@ -439,13 +508,15 @@ function renderResults(day, score, total, passed, timeMs, attempts, bestScore) {
 
   root.replaceChildren(el);
 
-  renderLeaderboardSubmit(el.querySelector("#leaderboard-submit"), {
-    day: day.id,
-    correct: score,
-    total,
-    timeMs,
-    passed,
-  });
+  if (!notCounted) {
+    renderLeaderboardSubmit(el.querySelector("#leaderboard-submit"), {
+      day: day.id,
+      correct: score,
+      total,
+      timeMs,
+      passed,
+    });
+  }
 }
 
 // ---------- Leaderboard: submit an attempt ----------
@@ -637,3 +708,13 @@ if (leaderboardBtn) {
 }
 
 renderMenu();
+
+// js/firebase-init.js is an ES module, which loads after this classic
+// script runs — so window.Leaderboard doesn't exist yet during the very
+// first renderMenu() call above, and the attempts reconcile inside it gets
+// silently skipped. Once the module signals it's ready, re-render (only if
+// the menu is still the visible view) so that first-load reconcile isn't
+// lost.
+window.addEventListener("leaderboard-ready", () => {
+  if (root.querySelector(".menu")) renderMenu();
+});

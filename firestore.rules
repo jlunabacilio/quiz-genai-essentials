@@ -5,22 +5,22 @@ rules_version = '2';
 // How to apply: Firebase Console -> your project -> Build -> Firestore
 // Database -> Rules tab -> paste this file's contents -> Publish.
 //
-// Design: anyone can read the "scores" collection (it's a public team
-// leaderboard, no login system), but a write must look like a genuine quiz
-// attempt — valid day/score bounds, a server-set timestamp, and a name under
-// 40 chars. Entries can never be edited or deleted once written, so no one
-// can silently rewrite another player's score.
-//
-// The "players" collection is a name registry that stops two people from
-// using the same leaderboard name. Its document ID is a normalized
-// (trimmed, lowercased) form of the name. Firestore evaluates a write as
-// "create" only when the document doesn't exist yet — the first person to
-// write players/{name} gets it, and since update/delete are always denied,
-// nobody (including the original claimant, from a different browser) can
-// ever overwrite that document again. This is enforced server-side, so it
-// holds even if two people submit the same name at nearly the same instant.
+// Design: anyone can read every collection here (it's a public team
+// leaderboard, no per-player login system), but a normal write must look
+// like a genuine quiz attempt — valid day/score bounds, a server-set
+// timestamp. Regular players can never edit or delete a "scores" entry, or
+// overwrite someone else's claimed name, or push their own attempt count
+// past 2 or backwards. The one exception is the admin account (see
+// isAdmin() below), used by admin.html to fix mistakes: rename or delete a
+// player, or reset their attempt count.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Keep this in sync with ADMIN_EMAIL in js/firebase-init.js.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'jlunab77@gmail.com';
+    }
+
     match /scores/{scoreId} {
       allow read: if true;
 
@@ -40,9 +40,22 @@ service cloud.firestore {
         request.resource.data.passed is bool &&
         request.resource.data.timestamp == request.time;
 
-      allow update, delete: if false;
+      // Regular players can never edit or delete a score once written —
+      // only the admin panel can, to rename or delete a player.
+      allow update, delete: if isAdmin();
     }
 
+    // Name registry: stops two people from using the same leaderboard
+    // name. Document ID is a normalized (trimmed, lowercased) form of the
+    // name. Firestore evaluates a write as "create" only when the document
+    // doesn't exist yet — the first person to write players/{name} gets
+    // it, and since a regular player can never update or delete it,
+    // nobody (including the original claimant, from a different browser)
+    // can ever take over that document. This is enforced server-side, so
+    // it holds even if two people submit the same name at nearly the same
+    // instant. The admin account can delete (to free a name up, or as
+    // part of deleting a player) or update (only used when a rename
+    // doesn't change the normalized name, e.g. fixing casing).
     match /players/{playerId} {
       allow read: if true;
 
@@ -53,7 +66,39 @@ service cloud.firestore {
         request.resource.data.displayName.size() <= 40 &&
         request.resource.data.claimedAt == request.time;
 
-      allow update, delete: if false;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // One document per (player, day): tracks how many quiz attempts a
+    // named player has used, so the 2-attempt cap holds even if someone
+    // clears their browser's local storage. A regular player may only
+    // create the first attempt (count 1) or increment their own count by
+    // exactly 1, never past 2 — so a third attempt is rejected server-side
+    // regardless of what the client-side UI allowed. Only the admin
+    // account can set a count back down (a reset) or delete the record
+    // entirely (as part of deleting a player).
+    match /attempts/{attemptId} {
+      allow read: if true;
+
+      allow create: if
+        request.resource.data.keys().hasAll(['playerId', 'day', 'count', 'updatedAt']) &&
+        request.resource.data.playerId is string &&
+        request.resource.data.day is int &&
+        request.resource.data.day >= 1 && request.resource.data.day <= 6 &&
+        request.resource.data.count == 1 &&
+        request.resource.data.updatedAt == request.time;
+
+      allow update: if
+        (
+          request.resource.data.playerId == resource.data.playerId &&
+          request.resource.data.day == resource.data.day &&
+          request.resource.data.count == resource.data.count + 1 &&
+          request.resource.data.count <= 2 &&
+          request.resource.data.updatedAt == request.time
+        ) || isAdmin();
+
+      allow delete: if isAdmin();
     }
   }
 }

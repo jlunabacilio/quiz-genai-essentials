@@ -19,17 +19,21 @@ Then visit `http://localhost:8000`.
 - Score 70% or higher on a day to unlock the next one.
 - Progress and best scores are saved in the browser's `localStorage` (per-browser, no backend).
 - A team leaderboard (per day + an overall tab) is backed by Firestore — see [Leaderboard setup](#leaderboard-setup) below. Without it configured, the app works exactly the same, just without the leaderboard.
+- For a named player, the 2-attempt cap is enforced by Firestore, not just the browser — see [Admin panel](#admin-panel) below.
 
 ## Project structure
 
 ```
 index.html                     # app shell
+admin.html                     # admin dashboard shell (unlinked from the main app)
 css/styles.css                 # styling
+css/admin.css                  # admin dashboard-specific styling
 js/data.js                     # quiz content (6 days, 48 questions)
 js/app.js                      # rendering + quiz logic + progress tracking + leaderboard UI
+js/admin.js                    # admin dashboard: sign in, reset attempts, rename/delete players
 js/firebase-config.template.js # checked-in template — no real values, safe to commit
 js/firebase-config.js          # your real Firebase config — git-ignored, never committed
-js/firebase-init.js            # loads the Firebase SDK from CDN, exposes window.Leaderboard
+js/firebase-init.js            # loads the Firebase SDK from CDN, exposes window.Leaderboard / window.Admin
 firestore.rules                # security rules to paste into the Firebase console
 .github/workflows/deploy.yml   # builds js/firebase-config.js from secrets and deploys to Pages
 ```
@@ -85,6 +89,30 @@ Locally: serve the site (`python3 -m http.server 8000` — the Firebase SDK is l
 - Each finished quiz attempt is stored as one row: name, day, correct/total, and time taken.
 - The **per-day** tab shows each person's best attempt for that day, ranked by most correct, then fastest time.
 - The **Overall** tab sums each person's best attempt across every day they've completed, ranked the same way, with a "days completed" column.
+
+## Admin panel
+
+`admin.html` (not linked from the main app — go to it directly) lets one admin account reset a player's attempts, rename a player (updates their past leaderboard entries too), or delete a player entirely (removes their scores, attempts, and claimed name).
+
+For a named player, Firestore's `attempts` collection is authoritative — the same server-side rules that cap a normal player at 2 attempts also mean only the admin account can move that count back down. This is why admin actions actually take effect on the affected player's own device: the app re-checks Firestore (not just the browser's local storage) whenever the menu loads for a named player, so a reset unlocks the day again next time they open the app, no matter whose browser it is.
+
+### 1. Create the admin account
+
+In the Firebase Console: **Build → Authentication → Sign-in method** → enable **Email/Password** (already done). Then **Build → Authentication → Users → Add user**, using `jlunab77@gmail.com` and a password you choose. That password is never in this repo — only you know it.
+
+The admin email is hard-coded in two places, kept in sync: `ADMIN_EMAIL` in `js/firebase-init.js` and the `isAdmin()` function in `firestore.rules`. To change it or add a second admin, update both (in the rules, `request.auth.token.email == '...'` can become `request.auth.token.email in ['...', '...']`) and re-publish the rules.
+
+### 2. Re-publish the security rules
+
+`firestore.rules` changed again to add admin-only permissions (rename/delete on `players` and `scores`, reset on `attempts`) and the new `attempts` collection itself. Paste the current file into **Firestore Database → Rules → Publish**, same as before.
+
+### 3. Use it
+
+Open `admin.html` (locally or on your deployed Pages URL — e.g. `https://yourname.github.io/quiz-genai-essentials/admin.html`), sign in with the admin account, and you'll see every player who's claimed a name: their attempts used per day (with a "Reset" link when they've used any) and their best score per day, plus **Rename** and **Delete** actions. The page has `noindex` in its `<meta>` tags and isn't linked anywhere, but it isn't otherwise hidden — anyone who guesses the URL reaches the login form, they just can't get past it without the admin password.
+
+### What this doesn't cover
+
+Attempts are only Firestore-authoritative for a *named* player (someone who got through the name gate). If the leaderboard isn't configured, or someone skips it, their attempt cap is still purely local-storage-based, same as before this feature — an admin has nothing to reset there because nothing was ever recorded remotely.
 
 ## Extending it
 
