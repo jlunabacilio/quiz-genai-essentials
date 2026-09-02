@@ -13,6 +13,8 @@ import {
   collection,
   addDoc,
   getDocs,
+  doc,
+  setDoc,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -23,6 +25,30 @@ let db = null;
 if (isConfigured) {
   const app = initializeApp(config);
   db = getFirestore(app);
+}
+
+// Case/whitespace-insensitive key so "Ana", "ana", and " ANA " all collide.
+// Keeps letters (including accented ones — Spanish names need this) and
+// digits; strips "/" since it isn't valid inside a single Firestore
+// document ID segment.
+function normalizeNameId(name) {
+  const normalized = String(name).trim().toLowerCase().replace(/\s+/g, " ").replace(/\//g, "-");
+  return normalized.slice(0, 60) || "player";
+}
+
+// Claims a display name for the leaderboard. Firestore evaluates a setDoc
+// as a "create" when the document doesn't exist yet and as an "update"
+// once it does — firestore.rules allows create but always denies update on
+// players/{id}, so the first person to claim a name gets it, and every
+// later attempt at that same (normalized) name is rejected server-side,
+// even if two people submit at nearly the same instant.
+async function claimName(name) {
+  if (!db) throw new Error("Firebase is not configured.");
+  const id = normalizeNameId(name);
+  await setDoc(doc(db, "players", id), {
+    displayName: String(name).trim().slice(0, 40),
+    claimedAt: serverTimestamp(),
+  });
 }
 
 async function submitScore({ name, day, correct, total, timeMs, passed }) {
@@ -46,6 +72,7 @@ async function fetchAllScores() {
 
 window.Leaderboard = {
   isConfigured,
+  claimName,
   submitScore,
   fetchAllScores,
 };

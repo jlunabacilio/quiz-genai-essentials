@@ -10,6 +10,15 @@ rules_version = '2';
 // attempt — valid day/score bounds, a server-set timestamp, and a name under
 // 40 chars. Entries can never be edited or deleted once written, so no one
 // can silently rewrite another player's score.
+//
+// The "players" collection is a name registry that stops two people from
+// using the same leaderboard name. Its document ID is a normalized
+// (trimmed, lowercased) form of the name. Firestore evaluates a write as
+// "create" only when the document doesn't exist yet — the first person to
+// write players/{name} gets it, and since update/delete are always denied,
+// nobody (including the original claimant, from a different browser) can
+// ever overwrite that document again. This is enforced server-side, so it
+// holds even if two people submit the same name at nearly the same instant.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /scores/{scoreId} {
@@ -30,6 +39,19 @@ service cloud.firestore {
         request.resource.data.timeMs > 0 && request.resource.data.timeMs < 3600000 &&
         request.resource.data.passed is bool &&
         request.resource.data.timestamp == request.time;
+
+      allow update, delete: if false;
+    }
+
+    match /players/{playerId} {
+      allow read: if true;
+
+      allow create: if
+        request.resource.data.keys().hasAll(['displayName', 'claimedAt']) &&
+        request.resource.data.displayName is string &&
+        request.resource.data.displayName.size() > 0 &&
+        request.resource.data.displayName.size() <= 40 &&
+        request.resource.data.claimedAt == request.time;
 
       allow update, delete: if false;
     }

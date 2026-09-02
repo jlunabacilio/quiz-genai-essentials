@@ -217,18 +217,46 @@ function renderNameGate(dayId) {
           <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
           <button class="btn btn-primary" id="lb-start-btn" type="button">Start quiz</button>
         </div>
+        <p class="leaderboard-note leaderboard-note-error" id="lb-name-error" hidden></p>
         <button class="link-btn" id="lb-skip-btn" type="button">Skip — don't use the leaderboard</button>
       </div>
     </div>
   `;
 
   const input = el.querySelector("#lb-name-input");
+  const startBtn = el.querySelector("#lb-start-btn");
+  const errorEl = el.querySelector("#lb-name-error");
+
   const start = () => {
     const name = input.value.trim();
-    if (name) setPlayerName(name);
-    renderQuiz(dayId);
+    if (!name) {
+      input.focus();
+      return;
+    }
+
+    errorEl.hidden = true;
+    input.disabled = true;
+    startBtn.disabled = true;
+    startBtn.textContent = "Checking name…";
+
+    withTimeout(window.Leaderboard.claimName(name), 10000, "Name check timed out")
+      .then(() => {
+        setPlayerName(name);
+        renderQuiz(dayId);
+      })
+      .catch((err) => {
+        input.disabled = false;
+        startBtn.disabled = false;
+        startBtn.textContent = "Start quiz";
+        errorEl.hidden = false;
+        errorEl.textContent =
+          err && err.code === "permission-denied"
+            ? "That name is already taken on the leaderboard — try another."
+            : "Couldn't verify that name right now — check your connection and try again.";
+        input.focus();
+      });
   };
-  el.querySelector("#lb-start-btn").addEventListener("click", start);
+  startBtn.addEventListener("click", start);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") start();
   });

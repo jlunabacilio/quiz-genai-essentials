@@ -64,9 +64,13 @@ cp js/firebase-config.template.js js/firebase-config.js
 
 ### 2. Apply the security rules
 
-In the Firebase Console, go to **Build → Firestore Database → Rules**, paste in the contents of [`firestore.rules`](./firestore.rules), and click **Publish**.
+In the Firebase Console, go to **Build → Firestore Database → Rules**, paste in the contents of [`firestore.rules`](./firestore.rules), and click **Publish**. If you set this up before names were unique, re-paste and re-publish — the file now also covers a second collection (see below).
 
 These rules let anyone read the `scores` collection (it's a public team leaderboard, no login system) but only accept a write that looks like a real quiz attempt (valid day/score bounds, a server-set timestamp) — and once written, an entry can never be edited or deleted, so no one can quietly rewrite another player's score. It's not tamper-proof against someone determined to fake a request, but that's an accepted tradeoff for a leaderboard with no login system.
+
+**Names are unique.** A second collection, `players`, acts as a name registry: its document ID is the normalized (trimmed, lowercased) name, and the rules allow *creating* that document but never updating or deleting it. Firestore treats a write to an existing document ID as an update, not a create — so the first person to claim a name gets it, and every later attempt at that same name (even from two people submitting at nearly the same instant) is rejected by the server, not just by a client-side check. The name gate calls this before letting the quiz start; a taken name shows an inline "already taken" message and lets the player pick another.
+
+This isn't identity verification — without a login system, nothing stops someone from claiming a name that isn't theirs, or a legitimate player from losing access to their name if they clear their browser storage (there's no way to "log back in" as a name once claimed by that browser). What it does guarantee is that only one browser can ever hold a given name at a time, so two different people can't both show up as "Ana" on the leaderboard.
 
 ### 3. Try it
 
