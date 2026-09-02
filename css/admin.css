@@ -1,0 +1,79 @@
+.admin-login-form {
+  text-align: left;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+.admin-login-form label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 14px 0 6px;
+}
+
+.admin-login-form label:first-child {
+  margin-top: 0;
+}
+
+.admin-login-form input {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.admin-login-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.admin-login-form .btn {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.admin-login-form .leaderboard-note {
+  margin: 12px 0 0;
+}
+
+.admin-whoami {
+  font-size: 0.85rem;
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-table {
+  min-width: 720px;
+}
+
+.admin-day-cell {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.admin-day-cell .muted {
+  font-size: 0.75rem;
+}
+
+.admin-reset-btn {
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+.admin-actions-cell {
+  white-space: nowrap;
+}
+
+.admin-actions-cell .link-btn {
+  margin-right: 12px;
+}
+
+.admin-actions-cell .admin-delete-btn {
+  color: var(--error);
+}

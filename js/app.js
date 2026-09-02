@@ -4,6 +4,7 @@ const STORAGE_KEY = "genai-essentials-quiz-progress";
 const PLAYER_NAME_KEY = "genai-essentials-player-name";
 const SKIP_LEADERBOARD_KEY = "genai-essentials-skip-leaderboard";
 const PASS_THRESHOLD = 0.7; // 70% correct unlocks the next day
+const MAX_ATTEMPTS = 2; // per day; the best of the (up to) 2 scores counts
 
 const root = document.getElementById("view-root");
 const headerScoreEl = document.getElementById("header-score");
@@ -31,6 +32,10 @@ function isDayUnlocked(dayId, progress) {
   if (dayId === 1) return true;
   const prev = progress[dayId - 1];
   return !!(prev && prev.passed);
+}
+
+function getAttempts(dayProgress) {
+  return (dayProgress && dayProgress.attempts) || 0;
 }
 
 function totalScore(progress) {
@@ -92,6 +97,60 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+const PACMAN_LOADER_HTML = `
+  <div class="loader-wrap">
+    <div class="loader" role="status" aria-label="Loading">
+      <div class="circles">
+        <span class="one"></span>
+        <span class="two"></span>
+        <span class="three"></span>
+      </div>
+      <div class="pacman">
+        <span class="top"></span>
+        <span class="bottom"></span>
+        <span class="left"></span>
+        <div class="eye"></div>
+      </div>
+    </div>
+  </div>
+`;
+
+// Firestore calls have no built-in timeout — an ad blocker, a flaky
+// connection, or an offline device can leave a write "pending" forever
+// with no error and no success. Race it against a timer so the UI always
+// lands on a definite state instead of hanging on a loading message.
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
+function leaderboardUsable() {
+  return Boolean(window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard());
+}
+
+// For a named player, Firestore's attempts collection is the authoritative
+// count (it's what the admin panel edits, and what the create/update rules
+// actually enforce) — this pulls it down and overwrites the local copy so
+// an admin's reset, or an attempt recorded from a different browser, shows
+// up here too. Returns whether anything actually changed.
+async function reconcileAttemptsFromFirestore(name) {
+  const remote = await withTimeout(window.Leaderboard.fetchAttempts(name), 10000, "Attempts fetch timed out");
+  const progress = loadProgress();
+  let changed = false;
+  for (let day = 1; day <= 6; day++) {
+    const remoteCount = remote[day] || 0;
+    const local = progress[day] || { bestScore: 0, passed: false, attempts: 0 };
+    if ((local.attempts || 0) !== remoteCount) {
+      progress[day] = { bestScore: local.bestScore || 0, passed: !!local.passed, attempts: remoteCount };
+      changed = true;
+    }
+  }
+  if (changed) saveProgress(progress);
+  return changed;
+}
+
 // ---------- Menu view ----------
 
 function renderMenu() {
@@ -115,13 +174,36 @@ function renderMenu() {
   QUIZ_DAYS.forEach((day) => {
     const unlocked = isDayUnlocked(day.id, progress);
     const dayProgress = progress[day.id];
+    const attempts = getAttempts(dayProgress);
+    const attemptsExhausted = attempts >= MAX_ATTEMPTS;
+    const playable = unlocked && !attemptsExhausted;
 
     const card = document.createElement("button");
-    card.className = "day-card" + (unlocked ? "" : " locked");
-    card.disabled = !unlocked;
+    card.className = "day-card" + (playable ? "" : " locked");
+    card.disabled = !playable;
 
-    const badge = dayProgress && dayProgress.passed ? "✓ Completed" : unlocked ? "Unlocked" : "🔒 Locked";
-    const badgeClass = dayProgress && dayProgress.passed ? "badge badge-done" : unlocked ? "badge badge-open" : "badge badge-locked";
+    let badge;
+    let badgeClass;
+    if (dayProgress && dayProgress.passed) {
+      badge = "✓ Completed";
+      badgeClass = "badge badge-done";
+    } else if (!unlocked) {
+      badge = "🔒 Locked";
+      badgeClass = "badge badge-locked";
+    } else if (attemptsExhausted) {
+      badge = "No attempts left";
+      badgeClass = "badge badge-locked";
+    } else {
+      badge = "Unlocked";
+      badgeClass = "badge badge-open";
+    }
+
+    let scoreLine;
+    if (dayProgress) {
+      scoreLine = `<div class="day-card-score">Best score: ${dayProgress.bestScore}/${day.questions.length} (${Math.round((dayProgress.bestScore / day.questions.length) * 100)}%) · ${attempts}/${MAX_ATTEMPTS} attempts used</div>`;
+    } else {
+      scoreLine = `<div class="day-card-score muted">${unlocked ? "Not attempted yet" : "Complete the previous day to unlock"}</div>`;
+    }
 
     card.innerHTML = `
       <div class="day-card-top">
@@ -130,15 +212,11 @@ function renderMenu() {
       </div>
       <h2>${day.title}</h2>
       <p>${day.subtitle}</p>
-      ${
-        dayProgress
-          ? `<div class="day-card-score">Best score: ${dayProgress.bestScore}/${day.questions.length} (${Math.round((dayProgress.bestScore / day.questions.length) * 100)}%)</div>`
-          : `<div class="day-card-score muted">${unlocked ? "Not attempted yet" : "Complete the previous day to unlock"}</div>`
-      }
+      ${scoreLine}
     `;
 
-    if (unlocked) {
-      card.addEventListener("click", () => renderQuiz(day.id));
+    if (playable) {
+      card.addEventListener("click", () => startQuiz(day.id));
     }
 
     grid.appendChild(card);
@@ -146,23 +224,105 @@ function renderMenu() {
 
   el.appendChild(grid);
 
-  if (Object.keys(progress).length > 0) {
-    const resetWrap = document.createElement("div");
-    resetWrap.className = "reset-wrap";
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "btn btn-ghost";
-    resetBtn.textContent = "Reset all progress";
-    resetBtn.addEventListener("click", () => {
-      if (confirm("Reset all quiz progress? This can't be undone.")) {
-        saveProgress({});
-        renderMenu();
-      }
-    });
-    resetWrap.appendChild(resetBtn);
-    el.appendChild(resetWrap);
+  root.replaceChildren(el);
+
+  // Best-effort background sync: local storage renders instantly, then we
+  // check Firestore for a named player and re-render only if something
+  // actually changed (an admin reset, or an attempt from another device).
+  // Guarded so a slow response can't yank the user back to the menu if
+  // they've already moved on to a quiz by the time it resolves.
+  const name = getPlayerName();
+  if (leaderboardUsable() && name) {
+    reconcileAttemptsFromFirestore(name)
+      .then((changed) => {
+        if (changed && root.querySelector(".menu")) renderMenu();
+      })
+      .catch(() => {}); // offline/slow — local data still governs
+  }
+}
+
+// ---------- Name gate (asked once, before the first quiz attempt) ----------
+
+function startQuiz(dayId) {
+  const progress = loadProgress();
+  if (getAttempts(progress[dayId]) >= MAX_ATTEMPTS) {
+    renderMenu(); // attempts exhausted — the day card shouldn't be clickable, but guard anyway
+    return;
   }
 
+  if (leaderboardUsable() && !getPlayerName()) {
+    renderNameGate(dayId);
+  } else {
+    renderQuiz(dayId);
+  }
+}
+
+function renderNameGate(dayId) {
+  const day = QUIZ_DAYS.find((d) => d.id === dayId);
+
+  const el = document.createElement("div");
+  el.className = "results";
+  el.innerHTML = `
+    <div class="results-card">
+      <div class="results-icon">🏆</div>
+      <h1>Before you start</h1>
+      <p class="results-message">Add your name so your score on Day ${day.id}: ${day.title} counts toward the team leaderboard.</p>
+      <div class="leaderboard-prompt">
+        <label for="lb-name-input">Your name</label>
+        <div class="leaderboard-prompt-row">
+          <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
+          <button class="btn btn-primary" id="lb-start-btn" type="button">Start quiz</button>
+        </div>
+        <p class="leaderboard-note leaderboard-note-error" id="lb-name-error" hidden></p>
+        <button class="link-btn" id="lb-skip-btn" type="button">Skip — don't use the leaderboard</button>
+      </div>
+    </div>
+  `;
+
+  const input = el.querySelector("#lb-name-input");
+  const startBtn = el.querySelector("#lb-start-btn");
+  const errorEl = el.querySelector("#lb-name-error");
+
+  const start = () => {
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+
+    errorEl.hidden = true;
+    input.disabled = true;
+    startBtn.disabled = true;
+    startBtn.textContent = "Checking name…";
+
+    withTimeout(window.Leaderboard.claimName(name), 10000, "Name check timed out")
+      .then(() => {
+        setPlayerName(name);
+        renderQuiz(dayId);
+      })
+      .catch((err) => {
+        input.disabled = false;
+        startBtn.disabled = false;
+        startBtn.textContent = "Start quiz";
+        errorEl.hidden = false;
+        errorEl.textContent =
+          err && err.code === "permission-denied"
+            ? "That name is already taken on the leaderboard — try another."
+            : "Couldn't verify that name right now — check your connection and try again.";
+        input.focus();
+      });
+  };
+  startBtn.addEventListener("click", start);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") start();
+  });
+  el.querySelector("#lb-skip-btn").addEventListener("click", () => {
+    setSkipLeaderboard(true);
+    renderQuiz(dayId);
+  });
+
   root.replaceChildren(el);
+  input.focus();
 }
 
 // ---------- Quiz view ----------
@@ -263,21 +423,50 @@ function renderQuiz(dayId) {
 
   function finishQuiz() {
     const timeMs = Math.round(performance.now() - state.startTime);
-    const progress = loadProgress();
-    const total = day.questions.length;
-    const pct = state.score / total;
-    const passed = pct >= PASS_THRESHOLD;
+    const name = getPlayerName();
 
-    const prev = progress[day.id];
-    const bestScore = prev ? Math.max(prev.bestScore, state.score) : state.score;
-    progress[day.id] = {
-      bestScore,
-      passed: (prev && prev.passed) || passed,
-    };
-    saveProgress(progress);
-    updateHeaderScore(progress);
+    if (leaderboardUsable() && name) {
+      // Firestore's attempts collection is authoritative for a named
+      // player: this is the write the security rules actually enforce
+      // (self-increment by exactly 1, capped at 2), so the result tells us
+      // the *real* count even if this browser's local copy was stale.
+      withTimeout(window.Leaderboard.recordAttempt(name, day.id), 10000, "Attempt recording timed out")
+        .then((attempts) => wrapUp(attempts, {}))
+        .catch((err) => {
+          if (err && err.message === "attempts-exhausted") {
+            // The server says both attempts were already used (most likely
+            // recorded from another tab/device) — this run doesn't count.
+            wrapUp(MAX_ATTEMPTS, { notCounted: true });
+          } else {
+            // Network hiccup: still enforce the cap locally so it can't be
+            // bypassed by staying offline, but flag that it didn't sync.
+            const prevAttempts = getAttempts(loadProgress()[day.id]);
+            wrapUp(prevAttempts + 1, { syncFailed: true });
+          }
+        });
+    } else {
+      const prevAttempts = getAttempts(loadProgress()[day.id]);
+      wrapUp(prevAttempts + 1, {});
+    }
 
-    renderResults(day, state.score, total, passed, timeMs);
+    function wrapUp(attempts, { notCounted, syncFailed } = {}) {
+      const progress = loadProgress();
+      const total = day.questions.length;
+      const pct = state.score / total;
+      const passed = !notCounted && pct >= PASS_THRESHOLD;
+      const prev = progress[day.id];
+
+      const bestScore = notCounted ? (prev ? prev.bestScore : 0) : prev ? Math.max(prev.bestScore, state.score) : state.score;
+      progress[day.id] = {
+        bestScore,
+        passed: notCounted ? !!(prev && prev.passed) : (prev && prev.passed) || passed,
+        attempts,
+      };
+      saveProgress(progress);
+      updateHeaderScore(progress);
+
+      renderResults(day, state.score, total, passed, timeMs, attempts, bestScore, { notCounted, syncFailed });
+    }
   }
 
   renderQuestion();
@@ -285,46 +474,67 @@ function renderQuiz(dayId) {
 
 // ---------- Results view ----------
 
-function renderResults(day, score, total, passed, timeMs) {
+function renderResults(day, score, total, passed, timeMs, attempts, bestScore, flags = {}) {
+  const { notCounted, syncFailed } = flags;
   const pct = Math.round((score / total) * 100);
   const nextDay = QUIZ_DAYS.find((d) => d.id === day.id + 1);
+  const attemptsRemaining = Math.max(0, MAX_ATTEMPTS - attempts);
+  const bestPct = total > 0 ? Math.round((bestScore / total) * 100) : 0;
+
+  let message;
+  if (notCounted) {
+    message = "This attempt didn't count — you'd already used both attempts for this day, most likely from another tab or device.";
+  } else if (passed) {
+    message = nextDay
+      ? `Great work — Day ${nextDay.id}: ${nextDay.title} is now unlocked.`
+      : "You've completed the full Generative AI Essentials path!";
+  } else if (attemptsRemaining > 0) {
+    message = `You need ${Math.round(PASS_THRESHOLD * 100)}% to unlock the next day. Review the material and try again.`;
+  } else {
+    message = `You've used both attempts for this day. Your best score, ${bestScore}/${total} (${bestPct}%), is what counts.`;
+  }
 
   const el = document.createElement("div");
   el.className = "results";
   el.innerHTML = `
-    <div class="results-card ${passed ? "results-pass" : "results-fail"}">
-      <div class="results-icon">${passed ? "🎉" : "📘"}</div>
-      <h1>${passed ? "Day complete!" : "Almost there"}</h1>
+    <div class="results-card ${notCounted ? "" : passed ? "results-pass" : "results-fail"}">
+      <div class="results-icon">${notCounted ? "⚠️" : passed ? "🎉" : "📘"}</div>
+      <h1>${notCounted ? "Attempt not recorded" : passed ? "Day complete!" : "Almost there"}</h1>
       <p class="results-score">${score} / ${total} correct (${pct}%) · ${formatTime(timeMs)}</p>
-      <p class="results-message">
+      <div class="results-messages">
+        <p class="results-message">${message}</p>
         ${
-          passed
-            ? nextDay
-              ? `Great work — Day ${nextDay.id}: ${nextDay.title} is now unlocked.`
-              : "You've completed the full Generative AI Essentials path!"
-            : `You need ${Math.round(PASS_THRESHOLD * 100)}% to unlock the next day. Review the material and try again.`
+          attemptsRemaining > 0 && !passed && !notCounted
+            ? `<p class="muted results-attempts-note">${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} left for this day.</p>`
+            : ""
         }
-      </p>
+        ${syncFailed ? `<p class="muted results-attempts-note">Couldn't confirm this attempt with the leaderboard server — it's still saved locally on this device.</p>` : ""}
+      </div>
       <div id="leaderboard-submit"></div>
       <div class="results-actions">
-        <button class="btn btn-secondary" id="retry-btn">Retry this day</button>
+        ${attemptsRemaining > 0 && !notCounted ? `<button class="btn btn-secondary" id="retry-btn">Retry this day</button>` : ""}
         <button class="btn btn-primary" id="menu-btn">Back to menu</button>
       </div>
     </div>
   `;
 
-  el.querySelector("#retry-btn").addEventListener("click", () => renderQuiz(day.id));
+  const retryBtn = el.querySelector("#retry-btn");
+  if (retryBtn) {
+    retryBtn.addEventListener("click", () => startQuiz(day.id));
+  }
   el.querySelector("#menu-btn").addEventListener("click", () => renderMenu());
 
   root.replaceChildren(el);
 
-  renderLeaderboardSubmit(el.querySelector("#leaderboard-submit"), {
-    day: day.id,
-    correct: score,
-    total,
-    timeMs,
-    passed,
-  });
+  if (!notCounted) {
+    renderLeaderboardSubmit(el.querySelector("#leaderboard-submit"), {
+      day: day.id,
+      correct: score,
+      total,
+      timeMs,
+      passed,
+    });
+  }
 }
 
 // ---------- Leaderboard: submit an attempt ----------
@@ -337,59 +547,28 @@ function renderLeaderboardSubmit(container, attempt) {
     return; // user opted out
   }
 
-  const existingName = getPlayerName();
-
-  if (existingName) {
-    container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
-    window.Leaderboard.submitScore({ name: existingName, ...attempt })
-      .then(() => {
-        container.innerHTML = `
-          <p class="leaderboard-note leaderboard-note-ok">
-            🏆 Submitted to the team leaderboard as "${escapeHtml(existingName)}".
-            <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
-          </p>
-        `;
-        container.querySelector("#not-you-btn").addEventListener("click", () => {
-          setPlayerName("");
-          renderLeaderboardSubmit(container, attempt);
-        });
-      })
-      .catch(() => {
-        container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
-      });
-    return;
+  const name = getPlayerName();
+  if (!name) {
+    return; // no name on file (shouldn't normally happen — startQuiz gates on this before the quiz begins)
   }
 
-  container.innerHTML = `
-    <div class="leaderboard-prompt">
-      <label for="lb-name-input">Add your name to the team leaderboard</label>
-      <div class="leaderboard-prompt-row">
-        <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
-        <button class="btn btn-primary" id="lb-submit-btn" type="button">Submit</button>
-      </div>
-      <button class="link-btn" id="lb-skip-btn" type="button">No thanks, don't ask again</button>
-    </div>
-  `;
-
-  const input = container.querySelector("#lb-name-input");
-  const submit = () => {
-    const name = input.value.trim();
-    if (!name) {
-      input.focus();
-      return;
-    }
-    setPlayerName(name);
-    renderLeaderboardSubmit(container, attempt);
-  };
-  container.querySelector("#lb-submit-btn").addEventListener("click", submit);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submit();
-  });
-
-  container.querySelector("#lb-skip-btn").addEventListener("click", () => {
-    setSkipLeaderboard(true);
-    container.innerHTML = "";
-  });
+  container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
+  withTimeout(window.Leaderboard.submitScore({ name, ...attempt }), 10000, "Leaderboard submission timed out")
+    .then(() => {
+      container.innerHTML = `
+        <p class="leaderboard-note leaderboard-note-ok">
+          🏆 Submitted to the team leaderboard as "${escapeHtml(name)}".
+          <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
+        </p>
+      `;
+      container.querySelector("#not-you-btn").addEventListener("click", () => {
+        setPlayerName("");
+        container.innerHTML = `<p class="leaderboard-note">Got it — you'll be asked for a name again next time you start a quiz.</p>`;
+      });
+    })
+    .catch(() => {
+      container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
+    });
 }
 
 // ---------- Leaderboard: view ----------
@@ -486,7 +665,7 @@ function renderLeaderboard() {
       <div class="quiz-meta">Team Leaderboard</div>
     </div>
     <div class="leaderboard-tabs" id="lb-tabs"></div>
-    <div id="lb-content" class="leaderboard-content"><p class="muted">Loading…</p></div>
+    <div id="lb-content" class="leaderboard-content">${PACMAN_LOADER_HTML}</div>
   `;
   el.querySelector("#lb-back-btn").addEventListener("click", () => renderMenu());
   root.replaceChildren(el);
@@ -520,7 +699,7 @@ function renderLeaderboard() {
 
   function renderContent() {
     if (!allScores) {
-      contentEl.innerHTML = `<p class="muted">Loading…</p>`;
+      contentEl.innerHTML = PACMAN_LOADER_HTML;
       return;
     }
     contentEl.innerHTML = activeTab === "overall" ? renderOverallTable(allScores) : renderDayTable(allScores, Number(activeTab));
@@ -529,7 +708,7 @@ function renderLeaderboard() {
   renderTabs();
   renderContent();
 
-  window.Leaderboard.fetchAllScores()
+  withTimeout(window.Leaderboard.fetchAllScores(), 10000, "Leaderboard fetch timed out")
     .then((scores) => {
       allScores = scores;
       renderContent();
@@ -547,3 +726,13 @@ if (leaderboardBtn) {
 }
 
 renderMenu();
+
+// js/firebase-init.js is an ES module, which loads after this classic
+// script runs — so window.Leaderboard doesn't exist yet during the very
+// first renderMenu() call above, and the attempts reconcile inside it gets
+// silently skipped. Once the module signals it's ready, re-render (only if
+// the menu is still the visible view) so that first-load reconcile isn't
+// lost.
+window.addEventListener("leaderboard-ready", () => {
+  if (root.querySelector(".menu")) renderMenu();
+});
