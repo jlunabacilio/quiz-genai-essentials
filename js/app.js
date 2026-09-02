@@ -138,7 +138,7 @@ function renderMenu() {
     `;
 
     if (unlocked) {
-      card.addEventListener("click", () => renderQuiz(day.id));
+      card.addEventListener("click", () => startQuiz(day.id));
     }
 
     grid.appendChild(card);
@@ -163,6 +163,57 @@ function renderMenu() {
   }
 
   root.replaceChildren(el);
+}
+
+// ---------- Name gate (asked once, before the first quiz attempt) ----------
+
+function startQuiz(dayId) {
+  const leaderboardUsable = window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard();
+  if (leaderboardUsable && !getPlayerName()) {
+    renderNameGate(dayId);
+  } else {
+    renderQuiz(dayId);
+  }
+}
+
+function renderNameGate(dayId) {
+  const day = QUIZ_DAYS.find((d) => d.id === dayId);
+
+  const el = document.createElement("div");
+  el.className = "results";
+  el.innerHTML = `
+    <div class="results-card">
+      <div class="results-icon">🏆</div>
+      <h1>Before you start</h1>
+      <p class="results-message">Add your name so your score on Day ${day.id}: ${day.title} counts toward the team leaderboard.</p>
+      <div class="leaderboard-prompt">
+        <label for="lb-name-input">Your name</label>
+        <div class="leaderboard-prompt-row">
+          <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
+          <button class="btn btn-primary" id="lb-start-btn" type="button">Start quiz</button>
+        </div>
+        <button class="link-btn" id="lb-skip-btn" type="button">Skip — don't use the leaderboard</button>
+      </div>
+    </div>
+  `;
+
+  const input = el.querySelector("#lb-name-input");
+  const start = () => {
+    const name = input.value.trim();
+    if (name) setPlayerName(name);
+    renderQuiz(dayId);
+  };
+  el.querySelector("#lb-start-btn").addEventListener("click", start);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") start();
+  });
+  el.querySelector("#lb-skip-btn").addEventListener("click", () => {
+    setSkipLeaderboard(true);
+    renderQuiz(dayId);
+  });
+
+  root.replaceChildren(el);
+  input.focus();
 }
 
 // ---------- Quiz view ----------
@@ -313,7 +364,7 @@ function renderResults(day, score, total, passed, timeMs) {
     </div>
   `;
 
-  el.querySelector("#retry-btn").addEventListener("click", () => renderQuiz(day.id));
+  el.querySelector("#retry-btn").addEventListener("click", () => startQuiz(day.id));
   el.querySelector("#menu-btn").addEventListener("click", () => renderMenu());
 
   root.replaceChildren(el);
@@ -337,59 +388,28 @@ function renderLeaderboardSubmit(container, attempt) {
     return; // user opted out
   }
 
-  const existingName = getPlayerName();
-
-  if (existingName) {
-    container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
-    window.Leaderboard.submitScore({ name: existingName, ...attempt })
-      .then(() => {
-        container.innerHTML = `
-          <p class="leaderboard-note leaderboard-note-ok">
-            🏆 Submitted to the team leaderboard as "${escapeHtml(existingName)}".
-            <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
-          </p>
-        `;
-        container.querySelector("#not-you-btn").addEventListener("click", () => {
-          setPlayerName("");
-          renderLeaderboardSubmit(container, attempt);
-        });
-      })
-      .catch(() => {
-        container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
-      });
-    return;
+  const name = getPlayerName();
+  if (!name) {
+    return; // no name on file (shouldn't normally happen — startQuiz gates on this before the quiz begins)
   }
 
-  container.innerHTML = `
-    <div class="leaderboard-prompt">
-      <label for="lb-name-input">Add your name to the team leaderboard</label>
-      <div class="leaderboard-prompt-row">
-        <input type="text" id="lb-name-input" maxlength="40" placeholder="Your name" autocomplete="off" />
-        <button class="btn btn-primary" id="lb-submit-btn" type="button">Submit</button>
-      </div>
-      <button class="link-btn" id="lb-skip-btn" type="button">No thanks, don't ask again</button>
-    </div>
-  `;
-
-  const input = container.querySelector("#lb-name-input");
-  const submit = () => {
-    const name = input.value.trim();
-    if (!name) {
-      input.focus();
-      return;
-    }
-    setPlayerName(name);
-    renderLeaderboardSubmit(container, attempt);
-  };
-  container.querySelector("#lb-submit-btn").addEventListener("click", submit);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submit();
-  });
-
-  container.querySelector("#lb-skip-btn").addEventListener("click", () => {
-    setSkipLeaderboard(true);
-    container.innerHTML = "";
-  });
+  container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
+  window.Leaderboard.submitScore({ name, ...attempt })
+    .then(() => {
+      container.innerHTML = `
+        <p class="leaderboard-note leaderboard-note-ok">
+          🏆 Submitted to the team leaderboard as "${escapeHtml(name)}".
+          <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
+        </p>
+      `;
+      container.querySelector("#not-you-btn").addEventListener("click", () => {
+        setPlayerName("");
+        container.innerHTML = `<p class="leaderboard-note">Got it — you'll be asked for a name again next time you start a quiz.</p>`;
+      });
+    })
+    .catch(() => {
+      container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
+    });
 }
 
 // ---------- Leaderboard: view ----------
