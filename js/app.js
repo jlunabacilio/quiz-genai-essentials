@@ -4,6 +4,7 @@ const STORAGE_KEY = "genai-essentials-quiz-progress";
 const PLAYER_NAME_KEY = "genai-essentials-player-name";
 const SKIP_LEADERBOARD_KEY = "genai-essentials-skip-leaderboard";
 const PASS_THRESHOLD = 0.7; // 70% correct unlocks the next day
+const MAX_ATTEMPTS = 2; // per day; the best of the (up to) 2 scores counts
 
 const root = document.getElementById("view-root");
 const headerScoreEl = document.getElementById("header-score");
@@ -31,6 +32,10 @@ function isDayUnlocked(dayId, progress) {
   if (dayId === 1) return true;
   const prev = progress[dayId - 1];
   return !!(prev && prev.passed);
+}
+
+function getAttempts(dayProgress) {
+  return (dayProgress && dayProgress.attempts) || 0;
 }
 
 function totalScore(progress) {
@@ -126,13 +131,36 @@ function renderMenu() {
   QUIZ_DAYS.forEach((day) => {
     const unlocked = isDayUnlocked(day.id, progress);
     const dayProgress = progress[day.id];
+    const attempts = getAttempts(dayProgress);
+    const attemptsExhausted = attempts >= MAX_ATTEMPTS;
+    const playable = unlocked && !attemptsExhausted;
 
     const card = document.createElement("button");
-    card.className = "day-card" + (unlocked ? "" : " locked");
-    card.disabled = !unlocked;
+    card.className = "day-card" + (playable ? "" : " locked");
+    card.disabled = !playable;
 
-    const badge = dayProgress && dayProgress.passed ? "✓ Completed" : unlocked ? "Unlocked" : "🔒 Locked";
-    const badgeClass = dayProgress && dayProgress.passed ? "badge badge-done" : unlocked ? "badge badge-open" : "badge badge-locked";
+    let badge;
+    let badgeClass;
+    if (dayProgress && dayProgress.passed) {
+      badge = "✓ Completed";
+      badgeClass = "badge badge-done";
+    } else if (!unlocked) {
+      badge = "🔒 Locked";
+      badgeClass = "badge badge-locked";
+    } else if (attemptsExhausted) {
+      badge = "No attempts left";
+      badgeClass = "badge badge-locked";
+    } else {
+      badge = "Unlocked";
+      badgeClass = "badge badge-open";
+    }
+
+    let scoreLine;
+    if (dayProgress) {
+      scoreLine = `<div class="day-card-score">Best score: ${dayProgress.bestScore}/${day.questions.length} (${Math.round((dayProgress.bestScore / day.questions.length) * 100)}%) · ${attempts}/${MAX_ATTEMPTS} attempts used</div>`;
+    } else {
+      scoreLine = `<div class="day-card-score muted">${unlocked ? "Not attempted yet" : "Complete the previous day to unlock"}</div>`;
+    }
 
     card.innerHTML = `
       <div class="day-card-top">
@@ -141,14 +169,10 @@ function renderMenu() {
       </div>
       <h2>${day.title}</h2>
       <p>${day.subtitle}</p>
-      ${
-        dayProgress
-          ? `<div class="day-card-score">Best score: ${dayProgress.bestScore}/${day.questions.length} (${Math.round((dayProgress.bestScore / day.questions.length) * 100)}%)</div>`
-          : `<div class="day-card-score muted">${unlocked ? "Not attempted yet" : "Complete the previous day to unlock"}</div>`
-      }
+      ${scoreLine}
     `;
 
-    if (unlocked) {
+    if (playable) {
       card.addEventListener("click", () => startQuiz(day.id));
     }
 
@@ -157,28 +181,18 @@ function renderMenu() {
 
   el.appendChild(grid);
 
-  if (Object.keys(progress).length > 0) {
-    const resetWrap = document.createElement("div");
-    resetWrap.className = "reset-wrap";
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "btn btn-ghost";
-    resetBtn.textContent = "Reset all progress";
-    resetBtn.addEventListener("click", () => {
-      if (confirm("Reset all quiz progress? This can't be undone.")) {
-        saveProgress({});
-        renderMenu();
-      }
-    });
-    resetWrap.appendChild(resetBtn);
-    el.appendChild(resetWrap);
-  }
-
   root.replaceChildren(el);
 }
 
 // ---------- Name gate (asked once, before the first quiz attempt) ----------
 
 function startQuiz(dayId) {
+  const progress = loadProgress();
+  if (getAttempts(progress[dayId]) >= MAX_ATTEMPTS) {
+    renderMenu(); // attempts exhausted — the day card shouldn't be clickable, but guard anyway
+    return;
+  }
+
   const leaderboardUsable = window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard();
   if (leaderboardUsable && !getPlayerName()) {
     renderNameGate(dayId);
@@ -332,14 +346,16 @@ function renderQuiz(dayId) {
 
     const prev = progress[day.id];
     const bestScore = prev ? Math.max(prev.bestScore, state.score) : state.score;
+    const attempts = getAttempts(prev) + 1;
     progress[day.id] = {
       bestScore,
       passed: (prev && prev.passed) || passed,
+      attempts,
     };
     saveProgress(progress);
     updateHeaderScore(progress);
 
-    renderResults(day, state.score, total, passed, timeMs);
+    renderResults(day, state.score, total, passed, timeMs, attempts, bestScore);
   }
 
   renderQuestion();
@@ -347,9 +363,22 @@ function renderQuiz(dayId) {
 
 // ---------- Results view ----------
 
-function renderResults(day, score, total, passed, timeMs) {
+function renderResults(day, score, total, passed, timeMs, attempts, bestScore) {
   const pct = Math.round((score / total) * 100);
   const nextDay = QUIZ_DAYS.find((d) => d.id === day.id + 1);
+  const attemptsRemaining = Math.max(0, MAX_ATTEMPTS - attempts);
+  const bestPct = Math.round((bestScore / total) * 100);
+
+  let message;
+  if (passed) {
+    message = nextDay
+      ? `Great work — Day ${nextDay.id}: ${nextDay.title} is now unlocked.`
+      : "You've completed the full Generative AI Essentials path!";
+  } else if (attemptsRemaining > 0) {
+    message = `You need ${Math.round(PASS_THRESHOLD * 100)}% to unlock the next day. Review the material and try again.`;
+  } else {
+    message = `You've used both attempts for this day. Your best score, ${bestScore}/${total} (${bestPct}%), is what counts.`;
+  }
 
   const el = document.createElement("div");
   el.className = "results";
@@ -358,24 +387,26 @@ function renderResults(day, score, total, passed, timeMs) {
       <div class="results-icon">${passed ? "🎉" : "📘"}</div>
       <h1>${passed ? "Day complete!" : "Almost there"}</h1>
       <p class="results-score">${score} / ${total} correct (${pct}%) · ${formatTime(timeMs)}</p>
-      <p class="results-message">
+      <div class="results-messages">
+        <p class="results-message">${message}</p>
         ${
-          passed
-            ? nextDay
-              ? `Great work — Day ${nextDay.id}: ${nextDay.title} is now unlocked.`
-              : "You've completed the full Generative AI Essentials path!"
-            : `You need ${Math.round(PASS_THRESHOLD * 100)}% to unlock the next day. Review the material and try again.`
+          attemptsRemaining > 0 && !passed
+            ? `<p class="muted results-attempts-note">${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} left for this day.</p>`
+            : ""
         }
-      </p>
+      </div>
       <div id="leaderboard-submit"></div>
       <div class="results-actions">
-        <button class="btn btn-secondary" id="retry-btn">Retry this day</button>
+        ${attemptsRemaining > 0 ? `<button class="btn btn-secondary" id="retry-btn">Retry this day</button>` : ""}
         <button class="btn btn-primary" id="menu-btn">Back to menu</button>
       </div>
     </div>
   `;
 
-  el.querySelector("#retry-btn").addEventListener("click", () => startQuiz(day.id));
+  const retryBtn = el.querySelector("#retry-btn");
+  if (retryBtn) {
+    retryBtn.addEventListener("click", () => startQuiz(day.id));
+  }
   el.querySelector("#menu-btn").addEventListener("click", () => renderMenu());
 
   root.replaceChildren(el);

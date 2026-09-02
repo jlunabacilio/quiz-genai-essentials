@@ -201,11 +201,6 @@ body {
   font-weight: 500;
 }
 
-.reset-wrap {
-  margin-top: 36px;
-  text-align: center;
-}
-
 /* ---------- Buttons ---------- */
 
 .btn {
@@ -417,10 +412,23 @@ body {
   margin: 0 0 12px;
 }
 
+.results-messages {
+  margin: 0 0 24px;
+}
+
 .results-message {
   color: var(--text-muted);
   line-height: 1.5;
-  margin: 0 0 28px;
+  margin: 0 0 6px;
+}
+
+.results-attempts-note {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.results-messages p:last-child {
+  margin-bottom: 0;
 }
 
 .results-actions {
