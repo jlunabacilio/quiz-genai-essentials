@@ -97,6 +97,24 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+const PACMAN_LOADER_HTML = `
+  <div class="loader-wrap">
+    <div class="loader" role="status" aria-label="Loading">
+      <div class="circles">
+        <span class="one"></span>
+        <span class="two"></span>
+        <span class="three"></span>
+      </div>
+      <div class="pacman">
+        <span class="top"></span>
+        <span class="bottom"></span>
+        <span class="left"></span>
+        <div class="eye"></div>
+      </div>
+    </div>
+  </div>
+`;
+
 // Firestore calls have no built-in timeout — an ad blocker, a flaky
 // connection, or an offline device can leave a write "pending" forever
 // with no error and no success. Race it against a timer so the UI always
@@ -647,7 +665,7 @@ function renderLeaderboard() {
       <div class="quiz-meta">Team Leaderboard</div>
     </div>
     <div class="leaderboard-tabs" id="lb-tabs"></div>
-    <div id="lb-content" class="leaderboard-content"><p class="muted">Loading…</p></div>
+    <div id="lb-content" class="leaderboard-content">${PACMAN_LOADER_HTML}</div>
   `;
   el.querySelector("#lb-back-btn").addEventListener("click", () => renderMenu());
   root.replaceChildren(el);
@@ -681,7 +699,7 @@ function renderLeaderboard() {
 
   function renderContent() {
     if (!allScores) {
-      contentEl.innerHTML = `<p class="muted">Loading…</p>`;
+      contentEl.innerHTML = PACMAN_LOADER_HTML;
       return;
     }
     contentEl.innerHTML = activeTab === "overall" ? renderOverallTable(allScores) : renderDayTable(allScores, Number(activeTab));

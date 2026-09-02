@@ -586,6 +586,140 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* ---------- Pac-Man loader (leaderboard loading state) ---------- */
+
+.loader-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.loader {
+  position: relative;
+  height: 60px;
+  width: 160px;
+  margin: 0;
+}
+
+.circles {
+  position: absolute;
+  left: -5px;
+  top: 0;
+  height: 60px;
+  width: 180px;
+  animation: pacman-circles 0.5s infinite linear;
+}
+
+.circles span {
+  position: absolute;
+  top: 25px;
+  height: 12px;
+  width: 12px;
+  border-radius: 12px;
+  background-color: var(--text);
+}
+
+.circles span.one {
+  right: 80px;
+}
+
+.circles span.two {
+  right: 40px;
+}
+
+.circles span.three {
+  right: 0px;
+}
+
+@keyframes pacman-circles {
+  0% {
+    transform: translate(0px, 0px);
+  }
+  100% {
+    transform: translate(-40px, 0px);
+  }
+}
+
+.pacman {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 60px;
+  width: 60px;
+}
+
+.pacman .eye {
+  position: absolute;
+  top: 10px;
+  left: 30px;
+  height: 7px;
+  width: 7px;
+  border-radius: 7px;
+  background-color: var(--bg-card);
+}
+
+.pacman span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 60px;
+  width: 60px;
+}
+
+.pacman span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  height: 30px;
+  width: 60px;
+  background-color: #ffdd33;
+}
+
+.pacman .top::before {
+  top: 0;
+  border-radius: 60px 60px 0px 0px;
+}
+
+.pacman .bottom::before {
+  bottom: 0;
+  border-radius: 0px 0px 60px 60px;
+}
+
+.pacman .left::before {
+  bottom: 0;
+  height: 60px;
+  width: 30px;
+  border-radius: 60px 0px 0px 60px;
+}
+
+.pacman .top {
+  animation: pacman-top 0.5s infinite;
+}
+
+@keyframes pacman-top {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-45deg);
+  }
+}
+
+.pacman .bottom {
+  animation: pacman-bottom 0.5s infinite;
+}
+
+@keyframes pacman-bottom {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(45deg);
+  }
+}
+
 @media (max-width: 520px) {
   .app-header {
     padding: 16px 20px;
