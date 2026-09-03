@@ -564,23 +564,41 @@ function renderLeaderboardSubmit(container, attempt) {
   }
 
   container.innerHTML = `<p class="leaderboard-note">Submitting to team leaderboard…</p>`;
-  withTimeout(window.Leaderboard.submitScore({ name, ...attempt }), 10000, "Leaderboard submission timed out")
-    .then(() => {
-      container.innerHTML = `
-        <p class="leaderboard-note leaderboard-note-ok">
-          🏆 Submitted to the team leaderboard as "${escapeHtml(name)}".
-          <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
-        </p>
-      `;
-      container.querySelector("#not-you-btn").addEventListener("click", () => {
-        setPlayerName("");
-        container.innerHTML = `<p class="leaderboard-note">Got it — you'll be asked for a name again next time you start a quiz.</p>`;
-      });
-    })
+
+  // Firestore's write confirmation can take a while to reach the client
+  // (or never arrive) even though the write itself has already landed on
+  // the server — so a slow response here isn't proof of failure. Race the
+  // real submission against a short grace period: if nothing definite
+  // (success or a fast rejection, like a rules problem) comes back in
+  // time, show success optimistically rather than telling the player it
+  // failed when it most likely didn't. A late success/failure after that
+  // is a no-op — the message already shown stands.
+  let settled = false;
+  const showSubmitted = () => {
+    if (settled) return;
+    settled = true;
+    container.innerHTML = `
+      <p class="leaderboard-note leaderboard-note-ok">
+        🏆 Submitted to the team leaderboard as "${escapeHtml(name)}".
+        <button class="link-btn" id="not-you-btn" type="button">Not you?</button>
+      </p>
+    `;
+    container.querySelector("#not-you-btn").addEventListener("click", () => {
+      setPlayerName("");
+      container.innerHTML = `<p class="leaderboard-note">Got it — you'll be asked for a name again next time you start a quiz.</p>`;
+    });
+  };
+
+  window.Leaderboard.submitScore({ name, ...attempt })
+    .then(showSubmitted)
     .catch((err) => {
+      if (settled) return;
+      settled = true;
       const { detail, hint } = describeFirebaseError(err);
       container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard (${escapeHtml(detail)}) — your local progress is still saved.${escapeHtml(hint)}</p>`;
     });
+
+  setTimeout(showSubmitted, 5000);
 }
 
 // ---------- Leaderboard: view ----------
