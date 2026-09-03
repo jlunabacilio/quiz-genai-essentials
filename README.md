@@ -80,6 +80,10 @@ This isn't identity verification — without a login system, nothing stops someo
 
 Locally: serve the site (`python3 -m http.server 8000` — the Firebase SDK is loaded as an ES module, which needs `http://`, not `file://`) after creating your local `js/firebase-config.js` per step 1. In production: push to `main` and check the **Actions** tab for the deploy run. Either way, complete a quiz, enter a name when prompted, then open the **🏆 Leaderboard** button in the header — your entry should show up under that day's tab and under "Overall".
 
+### If scores seem to "not save" or the leaderboard won't load
+
+Some corporate/campus networks and proxies interfere with the streaming connection Firestore normally uses, so requests hang instead of failing outright — a score can land on the server while the browser never hears back, showing an error even though nothing actually failed. `js/firebase-init.js` forces Firestore onto long-polling (`experimentalForceLongPolling`) specifically to avoid this; if you still see it, the error message now includes the real Firebase error code (e.g. `permission-denied` almost always means `firestore.rules` needs re-publishing — see step 2 above).
+
 ### Free tier limits (Spark plan, no credit card, can't incur charges)
 
 - 50,000 reads/day, 20,000 writes/day, 1 GiB stored — far more than a training cohort will use; the app just stops accepting requests for the rest of the day if the (very unlikely) limit is ever hit, no billing risk.

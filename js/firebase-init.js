@@ -9,7 +9,7 @@ import {
   initializeApp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getFirestore,
+  initializeFirestore,
   collection,
   addDoc,
   getDocs,
@@ -38,7 +38,16 @@ let db = null;
 let auth = null;
 if (isConfigured) {
   const app = initializeApp(config);
-  db = getFirestore(app);
+  // Firestore's default transport (WebChannel streaming) gets silently
+  // mangled by some corporate/campus proxies and firewalls — connections
+  // half-work: writes eventually land, but the client rarely or never
+  // hears the server's acknowledgment, and reads can hang indefinitely.
+  // That matches exactly what this app saw in production (scores were
+  // saving despite a "couldn't reach the leaderboard" error, and the
+  // leaderboard view wouldn't load at all). Forcing long-polling trades a
+  // little latency for a transport that survives that kind of
+  // interference — see https://firebase.google.com/docs/reference/js/firestore_.firestoresettings.md#firestoresettingsexperimentalforcelongpolling.
+  db = initializeFirestore(app, { experimentalForceLongPolling: true });
   auth = getAuth(app);
 }
 
