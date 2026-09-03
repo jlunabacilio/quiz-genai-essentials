@@ -147,7 +147,7 @@ function leaderboardUsable() {
 // an admin's reset, or an attempt recorded from a different browser, shows
 // up here too. Returns whether anything actually changed.
 async function reconcileAttemptsFromFirestore(name) {
-  const remote = await withTimeout(window.Leaderboard.fetchAttempts(name), 10000, "Attempts fetch timed out");
+  const remote = await withTimeout(window.Leaderboard.fetchAttempts(name), 20000, "Attempts fetch timed out");
   const progress = loadProgress();
   let changed = false;
   for (let day = 1; day <= 6; day++) {
@@ -306,7 +306,7 @@ function renderNameGate(dayId) {
     startBtn.disabled = true;
     startBtn.textContent = "Checking name…";
 
-    withTimeout(window.Leaderboard.claimName(name), 10000, "Name check timed out")
+    withTimeout(window.Leaderboard.claimName(name), 20000, "Name check timed out")
       .then(() => {
         setPlayerName(name);
         renderQuiz(dayId);
@@ -441,7 +441,7 @@ function renderQuiz(dayId) {
       // player: this is the write the security rules actually enforce
       // (self-increment by exactly 1, capped at 2), so the result tells us
       // the *real* count even if this browser's local copy was stale.
-      withTimeout(window.Leaderboard.recordAttempt(name, day.id), 10000, "Attempt recording timed out")
+      withTimeout(window.Leaderboard.recordAttempt(name, day.id), 20000, "Attempt recording timed out")
         .then((attempts) => wrapUp(attempts, {}))
         .catch((err) => {
           if (err && err.message === "attempts-exhausted") {
@@ -738,7 +738,7 @@ function renderLeaderboard() {
   renderTabs();
   renderContent();
 
-  withTimeout(window.Leaderboard.fetchAllScores(), 10000, "Leaderboard fetch timed out")
+  withTimeout(window.Leaderboard.fetchAllScores(), 25000, "Leaderboard fetch timed out")
     .then((scores) => {
       allScores = scores;
       renderContent();
