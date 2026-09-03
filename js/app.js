@@ -126,6 +126,17 @@ function withTimeout(promise, ms, message) {
   ]);
 }
 
+// A generic "couldn't reach it" message can't be told apart from "your
+// Firestore rules reject this" — which matters, because the fix for one is
+// "check your connection" and the fix for the other is "re-publish
+// firestore.rules". Surface the real code so that's obvious at a glance.
+function describeFirebaseError(err) {
+  const code = err && err.code;
+  const hint = code === "permission-denied" ? " Check that firestore.rules has been published (see the README)." : "";
+  const detail = code || (err && err.message) || "unknown error";
+  return { detail, hint };
+}
+
 function leaderboardUsable() {
   return Boolean(window.Leaderboard && window.Leaderboard.isConfigured && !getSkipLeaderboard());
 }
@@ -566,8 +577,9 @@ function renderLeaderboardSubmit(container, attempt) {
         container.innerHTML = `<p class="leaderboard-note">Got it — you'll be asked for a name again next time you start a quiz.</p>`;
       });
     })
-    .catch(() => {
-      container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard — your local progress is still saved.</p>`;
+    .catch((err) => {
+      const { detail, hint } = describeFirebaseError(err);
+      container.innerHTML = `<p class="leaderboard-note leaderboard-note-error">Couldn't reach the leaderboard (${escapeHtml(detail)}) — your local progress is still saved.${escapeHtml(hint)}</p>`;
     });
 }
 
@@ -713,8 +725,9 @@ function renderLeaderboard() {
       allScores = scores;
       renderContent();
     })
-    .catch(() => {
-      contentEl.innerHTML = `<p class="leaderboard-note-error">Couldn't load the leaderboard right now.</p>`;
+    .catch((err) => {
+      const { detail, hint } = describeFirebaseError(err);
+      contentEl.innerHTML = `<p class="leaderboard-note-error">Couldn't load the leaderboard right now (${escapeHtml(detail)}).${escapeHtml(hint)}</p>`;
     });
 }
 

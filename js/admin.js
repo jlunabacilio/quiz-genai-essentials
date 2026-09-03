@@ -149,8 +149,13 @@ function loadAndRenderTable(contentEl) {
     .then((data) => {
       renderTable(contentEl, buildPlayerRows(data));
     })
-    .catch(() => {
-      contentEl.innerHTML = `<p class="leaderboard-note-error">Couldn't load player data right now.</p>`;
+    .catch((err) => {
+      const detail = err && (err.code || err.message) ? ` (${err.code || err.message})` : "";
+      contentEl.innerHTML = `<p class="leaderboard-note-error">Couldn't load player data right now${escapeHtml(detail)}.${
+        err && err.code === "permission-denied"
+          ? " This usually means firestore.rules hasn't been re-published since the admin panel was added — check the README's Admin panel section."
+          : ""
+      }</p>`;
     });
 }
 
