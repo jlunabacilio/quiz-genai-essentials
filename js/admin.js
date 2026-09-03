@@ -73,7 +73,7 @@ function renderLogin(defaultEmail) {
     signinBtn.disabled = true;
     signinBtn.textContent = "Signing in…";
 
-    withTimeout(window.Admin.signIn(email, password), 10000, "Sign-in timed out")
+    withTimeout(window.Admin.signIn(email, password), 20000, "Sign-in timed out")
       .catch((err) => {
         signinBtn.disabled = false;
         signinBtn.textContent = "Sign in";
@@ -145,7 +145,7 @@ function renderDashboard(email) {
 
 function loadAndRenderTable(contentEl) {
   contentEl.innerHTML = `<p class="muted">Loading…</p>`;
-  withTimeout(window.Admin.fetchAll(), 15000, "Fetch timed out")
+  withTimeout(window.Admin.fetchAll(), 25000, "Fetch timed out")
     .then((data) => {
       renderTable(contentEl, buildPlayerRows(data));
     })
@@ -208,7 +208,7 @@ function renderTable(contentEl, rows) {
       const name = btn.dataset.name;
       const day = Number(btn.dataset.day);
       btn.disabled = true;
-      withTimeout(window.Admin.resetAttempt(name, day), 10000, "Reset timed out")
+      withTimeout(window.Admin.resetAttempt(name, day), 20000, "Reset timed out")
         .then(() => loadAndRenderTable(contentEl))
         .catch(() => {
           alert("Couldn't reset that attempt right now — try again.");
@@ -224,7 +224,7 @@ function renderTable(contentEl, rows) {
       if (!newName || !newName.trim() || newName.trim() === oldName) return;
 
       btn.disabled = true;
-      withTimeout(window.Admin.renamePlayer(oldName, newName.trim()), 15000, "Rename timed out")
+      withTimeout(window.Admin.renamePlayer(oldName, newName.trim()), 25000, "Rename timed out")
         .then(() => loadAndRenderTable(contentEl))
         .catch((err) => {
           alert(err && err.message ? err.message : "Couldn't rename that player right now — try again.");
@@ -239,7 +239,7 @@ function renderTable(contentEl, rows) {
       if (!confirm(`Delete "${name}"? This removes their leaderboard scores, attempts, and claimed name. This can't be undone.`)) return;
 
       btn.disabled = true;
-      withTimeout(window.Admin.deletePlayer(name), 15000, "Delete timed out")
+      withTimeout(window.Admin.deletePlayer(name), 25000, "Delete timed out")
         .then(() => loadAndRenderTable(contentEl))
         .catch(() => {
           alert("Couldn't delete that player right now — try again.");
